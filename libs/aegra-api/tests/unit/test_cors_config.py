@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.middleware import Middleware
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.testclient import TestClient
 
 
 def find_cors_middleware(app: FastAPI) -> Middleware | None:
@@ -286,3 +287,253 @@ async def test_cors_credentials_explicit_override(isolated_module_reload: Path) 
     assert cors_middleware.kwargs.get("allow_credentials") is True, (
         "Explicit allow_credentials=True should override the wildcard default"
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cors_regex_only_defaults_to_empty_origins_and_no_credentials(isolated_module_reload: Path) -> None:
+    """A regex without an origin list must not fall back to the wildcard."""
+    tmp_path = isolated_module_reload
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {"cors": {"allow_origin_regex": r"https://.*\.example\.com"}},
+            }
+        )
+    )
+
+    main = reload_main_module()
+
+    cors_middleware = find_cors_middleware(main.app)
+    assert cors_middleware is not None
+    assert cors_middleware.kwargs.get("allow_origins") == []
+    assert cors_middleware.kwargs.get("allow_origin_regex") == r"https://.*\.example\.com"
+    assert cors_middleware.kwargs.get("allow_credentials") is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cors_regex_and_explicit_origins_are_both_preserved(isolated_module_reload: Path) -> None:
+    """An explicit origin list and regex are passed together to Starlette."""
+    tmp_path = isolated_module_reload
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {
+                    "cors": {
+                        "allow_origins": ["https://listed.example.com"],
+                        "allow_origin_regex": r"https://regex\.example\.com",
+                    }
+                },
+            }
+        )
+    )
+
+    main = reload_main_module()
+
+    cors_middleware = find_cors_middleware(main.app)
+    assert cors_middleware is not None
+    assert cors_middleware.kwargs.get("allow_origins") == ["https://listed.example.com"]
+    assert cors_middleware.kwargs.get("allow_origin_regex") == r"https://regex\.example\.com"
+    assert cors_middleware.kwargs.get("allow_credentials") is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cors_regex_credentials_can_be_enabled_explicitly(isolated_module_reload: Path) -> None:
+    """Explicit credentials take precedence over the regex-specific default."""
+    tmp_path = isolated_module_reload
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {
+                    "cors": {
+                        "allow_origin_regex": r"https://.*\.example\.com",
+                        "allow_credentials": True,
+                    }
+                },
+            }
+        )
+    )
+
+    main = reload_main_module()
+
+    cors_middleware = find_cors_middleware(main.app)
+    assert cors_middleware is not None
+    assert cors_middleware.kwargs.get("allow_credentials") is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_empty_cors_regex_is_preserved_as_a_configured_value(isolated_module_reload: Path) -> None:
+    """An empty regex is distinct from an omitted regex and is passed to Starlette."""
+    tmp_path = isolated_module_reload
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {"cors": {"allow_origin_regex": ""}},
+            }
+        )
+    )
+
+    main = reload_main_module()
+
+    cors_middleware = find_cors_middleware(main.app)
+    assert cors_middleware is not None
+    assert cors_middleware.kwargs.get("allow_origins") == []
+    assert cors_middleware.kwargs.get("allow_origin_regex") == ""
+    assert cors_middleware.kwargs.get("allow_credentials") is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_explicit_wildcard_remains_wildcard_with_regex(isolated_module_reload: Path) -> None:
+    """An explicit wildcard origin keeps Starlette's allow-all behavior."""
+    tmp_path = isolated_module_reload
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {
+                    "cors": {
+                        "allow_origins": ["*"],
+                        "allow_origin_regex": r"https://regex\.example\.com",
+                    }
+                },
+            }
+        )
+    )
+
+    main = reload_main_module()
+
+    cors_middleware = find_cors_middleware(main.app)
+    assert cors_middleware is not None
+    assert cors_middleware.kwargs.get("allow_origins") == ["*"]
+    assert cors_middleware.kwargs.get("allow_origin_regex") == r"https://regex\.example\.com"
+
+
+@pytest.mark.unit
+def test_cors_regex_headers_allow_matching_origin_and_reject_nonmatching_get() -> None:
+    """A simple GET stays 200, while CORS headers identify allowed origins."""
+    from aegra_api.main import _add_cors_middleware
+
+    app = FastAPI()
+
+    @app.get("/resource")
+    async def resource() -> dict[str, str]:
+        return {"status": "ok"}
+
+    _add_cors_middleware(app, {"allow_origin_regex": r"https://.*\.example\.com"})
+
+    with TestClient(app) as client:
+        allowed = client.get("/resource", headers={"Origin": "https://app.example.com"})
+        rejected = client.get("/resource", headers={"Origin": "https://other.test"})
+
+    assert allowed.status_code == 200
+    assert allowed.headers.get("access-control-allow-origin") == "https://app.example.com"
+    assert rejected.status_code == 200
+    assert "access-control-allow-origin" not in rejected.headers
+
+
+@pytest.mark.unit
+def test_cors_regex_preflight_headers_reflect_matching_origin_only() -> None:
+    """Preflight responses succeed only when the origin matches the regex."""
+    from aegra_api.main import _add_cors_middleware
+
+    app = FastAPI()
+
+    @app.get("/resource")
+    async def resource() -> dict[str, str]:
+        return {"status": "ok"}
+
+    _add_cors_middleware(app, {"allow_origin_regex": r"https://.*\.example\.com"})
+    preflight_headers = {
+        "Origin": "https://app.example.com",
+        "Access-Control-Request-Method": "GET",
+    }
+    rejected_headers = {
+        "Origin": "https://other.test",
+        "Access-Control-Request-Method": "GET",
+    }
+
+    with TestClient(app) as client:
+        allowed = client.options("/resource", headers=preflight_headers)
+        rejected = client.options("/resource", headers=rejected_headers)
+
+    assert allowed.status_code == 200
+    assert allowed.headers.get("access-control-allow-origin") == "https://app.example.com"
+    assert rejected.status_code == 400
+    assert "access-control-allow-origin" not in rejected.headers
+
+
+@pytest.mark.unit
+def test_cors_regex_allows_explicit_origin_and_regex_origin() -> None:
+    """The configured list and regex each authorize origins independently."""
+    from aegra_api.main import _add_cors_middleware
+
+    app = FastAPI()
+
+    @app.get("/resource")
+    async def resource() -> dict[str, str]:
+        return {"status": "ok"}
+
+    _add_cors_middleware(
+        app,
+        {
+            "allow_origins": ["https://listed.example.com"],
+            "allow_origin_regex": r"https://regex\.example\.com",
+        },
+    )
+
+    with TestClient(app) as client:
+        listed = client.get("/resource", headers={"Origin": "https://listed.example.com"})
+        regex = client.get("/resource", headers={"Origin": "https://regex.example.com"})
+        rejected = client.get("/resource", headers={"Origin": "https://other.test"})
+
+    assert listed.headers.get("access-control-allow-origin") == "https://listed.example.com"
+    assert regex.headers.get("access-control-allow-origin") == "https://regex.example.com"
+    assert "access-control-allow-origin" not in rejected.headers
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_cors_regex_applies_to_a_custom_app(isolated_module_reload: Path) -> None:
+    """The custom-app branch receives the same CORS middleware configuration."""
+    tmp_path = isolated_module_reload
+    custom_app_file = tmp_path / "custom_routes.py"
+    custom_app_file.write_text(
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "@app.get('/custom')\n"
+        "async def custom() -> dict[str, str]:\n"
+        "    return {'status': 'ok'}\n"
+    )
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {
+                    "app": "./custom_routes.py:app",
+                    "cors": {"allow_origin_regex": r"https://.*\.example\.com"},
+                },
+            }
+        )
+    )
+
+    main = reload_main_module()
+
+    client = TestClient(main.app)
+    response = client.get("/custom", headers={"Origin": "https://app.example.com"})
+
+    assert response.status_code == 200
+    assert response.headers.get("access-control-allow-origin") == "https://app.example.com"
