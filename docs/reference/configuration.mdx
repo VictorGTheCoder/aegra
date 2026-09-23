@@ -253,6 +253,8 @@ Configure custom routes and CORS.
 
 When `allow_origin_regex` is non-null, it is passed to Starlette's `CORSMiddleware` and matched against the complete origin. If `allow_origins` is also provided, either the list or regex can authorize an origin. An explicit `allow_origins: ["*"]` remains a wildcard. An empty string still counts as configured; it does not match normal non-empty origins.
 
+Note: the `allow_credentials` default only recognizes an exact `["*"]` or `"*"`. A wildcard mixed with other concrete origins (e.g. `["*", "https://example.com"]`) currently still defaults `allow_credentials` to `true`, even though Starlette treats that list as allow-all — [tracked in #633](https://github.com/aegra/aegra/issues/633). Set `allow_credentials` explicitly if you use a mixed list.
+
 See [custom routes guide](/guides/custom-routes) for details.
 
 ## `store`
