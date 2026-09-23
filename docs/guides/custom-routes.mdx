@@ -121,7 +121,7 @@ Configure CORS for your custom routes in `aegra.json`:
 }
 ```
 
-Without `allow_origin_regex`, the default is `allow_origins: ["*"]` with `allow_credentials: false`. When you specify concrete origins, `allow_credentials` defaults to `true` automatically. When `allow_origin_regex` is non-null and `allow_origins` is omitted, `allow_origins` defaults to `[]` and `allow_credentials` defaults to `false`. An explicit origin list and regex are combined, while an explicit `"*"` remains a wildcard. You can always set `allow_credentials` explicitly to override the default. The regex is passed to Starlette and matched against the complete origin.
+Without `allow_origin_regex`, the default is `allow_origins: ["*"]` with `allow_credentials: false`. When you specify concrete origins and no regex, `allow_credentials` defaults to `true` automatically. When `allow_origin_regex` is non-null, `allow_credentials` defaults to `false`, and if `allow_origins` is omitted, it defaults to `[]`. An explicit origin list and regex are combined, while an explicit `"*"` remains a wildcard. You can always set `allow_credentials` explicitly to override the default. The regex is passed to Starlette and matched against the complete origin.
 
 ## Configuration reference
 
