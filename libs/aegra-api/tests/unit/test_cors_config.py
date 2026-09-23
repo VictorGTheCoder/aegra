@@ -422,21 +422,27 @@ async def test_explicit_wildcard_remains_wildcard_with_regex(isolated_module_rel
 
 
 @pytest.mark.unit
-def test_cors_regex_headers_allow_matching_origin_and_reject_nonmatching_get() -> None:
+@pytest.mark.asyncio
+async def test_cors_regex_headers_allow_matching_origin_and_reject_nonmatching_get(
+    isolated_module_reload: Path,
+) -> None:
     """A simple GET stays 200, while CORS headers identify allowed origins."""
-    from aegra_api.main import _add_cors_middleware
+    tmp_path = isolated_module_reload
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {"cors": {"allow_origin_regex": r"https://.*\.example\.com"}},
+            }
+        )
+    )
 
-    app = FastAPI()
+    main = reload_main_module()
+    client = TestClient(main.app)
 
-    @app.get("/resource")
-    async def resource() -> dict[str, str]:
-        return {"status": "ok"}
-
-    _add_cors_middleware(app, {"allow_origin_regex": r"https://.*\.example\.com"})
-
-    with TestClient(app) as client:
-        allowed = client.get("/resource", headers={"Origin": "https://app.example.com"})
-        rejected = client.get("/resource", headers={"Origin": "https://other.test"})
+    allowed = client.get("/info", headers={"Origin": "https://app.example.com"})
+    rejected = client.get("/info", headers={"Origin": "https://other.test"})
 
     assert allowed.status_code == 200
     assert allowed.headers.get("access-control-allow-origin") == "https://app.example.com"
@@ -445,17 +451,24 @@ def test_cors_regex_headers_allow_matching_origin_and_reject_nonmatching_get() -
 
 
 @pytest.mark.unit
-def test_cors_regex_preflight_headers_reflect_matching_origin_only() -> None:
+@pytest.mark.asyncio
+async def test_cors_regex_preflight_headers_reflect_matching_origin_only(
+    isolated_module_reload: Path,
+) -> None:
     """Preflight responses succeed only when the origin matches the regex."""
-    from aegra_api.main import _add_cors_middleware
+    tmp_path = isolated_module_reload
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {"cors": {"allow_origin_regex": r"https://.*\.example\.com"}},
+            }
+        )
+    )
 
-    app = FastAPI()
-
-    @app.get("/resource")
-    async def resource() -> dict[str, str]:
-        return {"status": "ok"}
-
-    _add_cors_middleware(app, {"allow_origin_regex": r"https://.*\.example\.com"})
+    main = reload_main_module()
+    client = TestClient(main.app)
     preflight_headers = {
         "Origin": "https://app.example.com",
         "Access-Control-Request-Method": "GET",
@@ -465,9 +478,8 @@ def test_cors_regex_preflight_headers_reflect_matching_origin_only() -> None:
         "Access-Control-Request-Method": "GET",
     }
 
-    with TestClient(app) as client:
-        allowed = client.options("/resource", headers=preflight_headers)
-        rejected = client.options("/resource", headers=rejected_headers)
+    allowed = client.options("/info", headers=preflight_headers)
+    rejected = client.options("/info", headers=rejected_headers)
 
     assert allowed.status_code == 200
     assert allowed.headers.get("access-control-allow-origin") == "https://app.example.com"
@@ -476,28 +488,33 @@ def test_cors_regex_preflight_headers_reflect_matching_origin_only() -> None:
 
 
 @pytest.mark.unit
-def test_cors_regex_allows_explicit_origin_and_regex_origin() -> None:
+@pytest.mark.asyncio
+async def test_cors_regex_allows_explicit_origin_and_regex_origin(
+    isolated_module_reload: Path,
+) -> None:
     """The configured list and regex each authorize origins independently."""
-    from aegra_api.main import _add_cors_middleware
-
-    app = FastAPI()
-
-    @app.get("/resource")
-    async def resource() -> dict[str, str]:
-        return {"status": "ok"}
-
-    _add_cors_middleware(
-        app,
-        {
-            "allow_origins": ["https://listed.example.com"],
-            "allow_origin_regex": r"https://regex\.example\.com",
-        },
+    tmp_path = isolated_module_reload
+    config_file = tmp_path / "aegra.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "graphs": {"test": "./test.py:graph"},
+                "http": {
+                    "cors": {
+                        "allow_origins": ["https://listed.example.com"],
+                        "allow_origin_regex": r"https://regex\.example\.com",
+                    }
+                },
+            }
+        )
     )
 
-    with TestClient(app) as client:
-        listed = client.get("/resource", headers={"Origin": "https://listed.example.com"})
-        regex = client.get("/resource", headers={"Origin": "https://regex.example.com"})
-        rejected = client.get("/resource", headers={"Origin": "https://other.test"})
+    main = reload_main_module()
+    client = TestClient(main.app)
+
+    listed = client.get("/info", headers={"Origin": "https://listed.example.com"})
+    regex = client.get("/info", headers={"Origin": "https://regex.example.com"})
+    rejected = client.get("/info", headers={"Origin": "https://other.test"})
 
     assert listed.headers.get("access-control-allow-origin") == "https://listed.example.com"
     assert regex.headers.get("access-control-allow-origin") == "https://regex.example.com"
